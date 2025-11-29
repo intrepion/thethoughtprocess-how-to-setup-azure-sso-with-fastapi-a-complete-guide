@@ -125,3 +125,42 @@ def require_roles(required_roles: List[str]):
         return user
 
     return role_checker
+
+
+@app.get("/protected")
+async def protected_endpoint(user=Depends(require_auth)):
+    """
+    A protected endpoint that requires authentication via session.
+    """
+
+    return {
+        "message": f"Hello, {user.get('name')}! This is protected data.",
+        "user_details": user,
+    }
+
+
+@app.get("/roleProtected", dependencies=[Depends(require_roles(["Admin"]))])
+async def role_protected_endpoint(user=Depends(require_auth)):
+    """
+    An endpoint protected by role 'Admin'.
+    """
+
+    return {
+        "message": f"Welcome, Admin {user.get('name')}!",
+        "detail": "You have access to this role-protected data.",
+    }
+
+
+@app.get("/unprotected")
+async def unprotected_endpoint():
+    """
+    An unprotected endpoint that anyone can access.
+    """
+    return {"message": "This is an unprotected endpoint."}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    # This is for development only. In production, use a proper ASGI server.
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
