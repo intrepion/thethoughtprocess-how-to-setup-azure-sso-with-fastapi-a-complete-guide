@@ -9,22 +9,36 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 import msal
-from starlette.middleware.session import SessionMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 
-AZURE_CLIENT_ID = f""  # Retrieved from previous step
-AZURE_CLIENT_SECRET = f""  # Retrieved from previous step
-AZURE_TENANT_ID = f""  # Retrieved from previous step
-AZURE_REDIRECT_URI = f""  # The redirect URL you defined in the app registration
-SECRET_KEY = f""  # Random value you choose for securing the session
+
+class NotAuthenticatedException(Exception):
+    pass
+
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Retrieve variables (fails gracefully if they are missing, or you can add checks)
+AZURE_CLIENT_ID = os.getenv("AZURE_CLIENT_ID")
+AZURE_CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
+AZURE_TENANT_ID = os.getenv("AZURE_TENANT_ID")
+AZURE_REDIRECT_URI = os.getenv("AZURE_REDIRECT_URI")
+SECRET_KEY = os.getenv("SECRET_KEY")
+
 AUTHORITY = f"https://login.microsoftonline.com/{AZURE_TENANT_ID}"
 SCOPE = ["User.Read"]  # This scope will be used to say ( we want to access user info)
 
 app = FastAPI()
 
 # Add session middleware
-# NOTE: In production, ensure 'https_only=True' and 'samesite="none"' for cross-site SSO redirects.
+# NOTE: In production, ensure 'https_only=True' and 'same_site="none"' for cross-site SSO redirects.
 app.add_middleware(
-    SessionMiddleware, secret_key=SECRET_KEY, https_only=True, samesite="none"
+    # SessionMiddleware, secret_key=SECRET_KEY, https_only=True, same_site="none"
+    SessionMiddleware,
+    secret_key=SECRET_KEY,
+    https_only=False,  # CHANGE THIS to False for localhost/HTTP
+    same_site="lax",  # CHANGE THIS to 'lax' for localhost
 )
 
 # Initialize MSAL Confidential Client
@@ -37,6 +51,11 @@ msal_client = msal.ConfidentialClientApplication(
 # --- API Endpoints ---
 
 
+@app.exception_handler(NotAuthenticatedException)
+async def auth_exception_handler(request: Request, exc: NotAuthenticatedException):
+    return RedirectResponse(url="/login")
+
+
 @app.get("/login")
 async def login(request: Request):
     """
@@ -45,6 +64,11 @@ async def login(request: Request):
     """
     state = secrets.token_urlsafe(32)
     request.session["state"] = state
+
+    # DEBUG LOG
+    print(f"--- LOGIN STARTED ---")
+    print(f"Generated State: {state}")
+    print(f"Session before redirect: {request.session}")
 
     authorization_url = msal_client.get_authorization_request_url(
         scopes=SCOPE, state=state, redirect_uri=AZURE_REDIRECT_URI
@@ -58,6 +82,14 @@ async def callback(code: str, state: str, request: Request):
     Handle the OAuth callback from Microsoft Entra ID.
     Stores the user's token and info in the session.
     """
+
+    # DEBUG LOG
+    session_state = request.session.get("state")
+    print(f"--- CALLBACK RECEIVED ---")
+    print(f"URL State: {state}")
+    print(f"Session State: {session_state}")
+    print(f"Full Session: {request.session}")
+
     # Verify the state to prevent CSRF attacks
     if state != request.session.get("state"):
         raise HTTPException(status_code=400, detail="Invalid state parameter")
@@ -77,8 +109,11 @@ async def callback(code: str, state: str, request: Request):
     # The id_token contains user claims
     id_token_claims = jwt.decode(
         token_response["id_token"],
+        key=None,  # Required by python-jose, even if not verifying
         options={
-            "verify_signature": False
+            "verify_signature": False,
+            "verify_aud": False,  # <--- Add this line to skip Audience check
+            "verify_iss": False,  # <--- Good practice to skip Issuer check in this mode too
         },  # Signature already verified by MSAL/Entra ID
     )
 
@@ -105,8 +140,10 @@ def require_auth(request: Request):
     """
     user = request.session.get("user")
     if not user:
-        response = RedirectResponse(url="/login", status_code=302)
-        raise HTTPException(status_code=response.status_code, headers=response.headers)
+        # response = RedirectResponse(url="/login", status_code=302)
+        # raise HTTPException(status_code=response.status_code, headers=response.headers)
+        # Instead of raising HTTPException, raise our custom exception
+        raise NotAuthenticatedException()
     return user
 
 
