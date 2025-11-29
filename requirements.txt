@@ -1,0 +1,6 @@
+fastapi
+httpx
+python-dotenv
+python-jose
+msal # This is for azure authentification
+uvicorn
