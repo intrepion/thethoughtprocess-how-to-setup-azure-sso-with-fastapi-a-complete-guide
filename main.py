@@ -91,3 +91,37 @@ async def callback(code: str, state: str, request: Request):
     }
 
     return RedirectResponse(url="/protected")
+
+
+# --- Authentication Logic ---
+# (We don't need manual token verification with sessions, but this can be useful for other purposes)
+
+
+# --- Dependencies ---
+def require_auth(request: Request):
+    """
+    Dependency to protect an endpoint.
+    Raises an exception if the user is not authenticated.
+    """
+    user = request.session.get("user")
+    if not user:
+        response = RedirectResponse(url="/login", status_code=302)
+        raise HTTPException(status_code=response.status_code, headers=response.headers)
+    return user
+
+
+def require_roles(required_roles: List[str]):
+    """
+    Dependency factory to check for required roles in the session.
+    """
+
+    def role_checker(user: Dict[str, Any] = Depends(require_auth)):
+        user_roles = user.get("roles", [])
+        if not any(role in user_roles for role in required_roles):
+            response = RedirectResponse(url="/login", status_code=302)
+            raise HTTPException(
+                status_code=response.status_code, headers=response.headers
+            )
+        return user
+
+    return role_checker
